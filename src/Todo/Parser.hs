@@ -31,26 +31,31 @@ lineComment = char '#' *> skipMany (noneOf ("\n" :: String))
 brackets :: Parser a -> Parser a
 brackets = between (char '[') (char ']')
 
-todo :: Parser [Task]
-todo = many (L.nonIndented scn taskLine) <* eof
+todo :: Parser [Todo Task]
+todo = many (L.nonIndented scn indentedTask) <* eof
 
 taskLine :: Parser Task
-taskLine = L.indentBlock scn $ do
-  curIdent <- L.indentLevel
-  symbol "-"
+taskLine = do
   sts     <- lexeme $ brackets (lexeme statusSym)
   message <- lexeme $ many (noneOf ("\n[" :: String))
   time    <- optional . lexeme $ brackets $ do
     str <- many $ noneOf ("\n]" :: String)
     str2Time str
-
-  let mkTask = return . Task sts (strip $ toS message) time []
-  let indent = L.IndentMany (Just $ curIdent <> unsafePos 2) (mkTask) (taskLine)
-
-  return indent
-
+  return $ Task sts (strip $ toS message) time []
   where statusSym =     char 'X' *> pure Finished
                     <|> char 'O' *> pure Started
                     <|> char ' ' *> pure Open
         str2Time :: Monad m => String -> m UTCTime
         str2Time = parseTimeM False defaultTimeLocale rfc822DateFormat
+
+indentedTask :: Parser (Todo Task)
+indentedTask = L.indentBlock scn $ do
+  curIdent <- L.indentLevel
+  symbol "-"
+  t <- taskLine
+
+  let indent = L.IndentMany (Just $ curIdent <> unsafePos 2) (return . Todo t) (indentedTask)
+
+  return indent
+
+

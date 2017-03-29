@@ -1,12 +1,18 @@
-{-# LANGUAGE DeriveGeneric, ScopedTypeVariables #-}
+{-# LANGUAGE DeriveGeneric       #-}
+{-# LANGUAGE NoImplicitPrelude   #-}
+{-# LANGUAGE OverloadedStrings   #-}
+{-# LANGUAGE ScopedTypeVariables #-}
 module Main where
 
-import Protolude
-import Todo
+import           Protolude
 
-import Text.Megaparsec
+import           Options.Generic
+import           Text.Megaparsec
 
-import Options.Generic
+import qualified Brick.Main      as M
+
+import           Create
+import           Todo
 
 data Command
   = Current
@@ -24,7 +30,7 @@ main = do
   config <- getRecord "todo" :: IO Command
   applyAction config
 
-type Action = Todo -> IO Todo
+type Action = [Todo Task] -> IO [Todo Task]
 
 applyAction :: Command -> IO ()
 applyAction command = do
@@ -34,10 +40,16 @@ applyAction command = do
     Right todos -> do
      todos' <- applyCommand command todos
      writeFile "todo" (toS $ prettyPrint todos')
-  where applyCommand (Show _)  todos = showTasks todos
-        applyCommand (Current) todos = currentTasks todos
-        applyCommand (Finish)  todos = finishTask todos
-        applyCommand (Next)    todos = nextTask todos
+  where applyCommand (Show _)   todos = showTasks todos
+        applyCommand (Current)  todos = currentTasks todos
+        applyCommand (Finish)   todos = finishTask todos
+        applyCommand (Next)     todos = nextTask todos
+        applyCommand (Create t) todos = createTask todos
+
+createTask :: Action
+createTask st = do
+  M.defaultMain app (tree st)
+  return st
 
 showTasks :: Action
 showTasks st = do
@@ -49,22 +61,26 @@ showTasks st = do
 finishTask :: Action
 finishTask st = do
   let opened = join $ map (filterTask $ \t -> status t == Started) st
-  let flattened = join $ map flattenTask opened
+  let valid  = filter (foldr (\ t acc -> acc && (status t == Finished)) True) opened
+  let flattened = join $ map flattenTask valid
 
   putStrLn . prettyPrint $ numed flattened
 
-  (id :: Maybe Int) <- liftM (readMaybe . toS) getLine
+  (id :: Maybe Int) <- fmap (readMaybe . toS) getLine
 
-  case id >>= (\i -> (,) <$> pure i <*> pluckTask i opened) of
-    Just (i, task) -> do
-      let updated = map (mapTask (\t ->
-                                  if (t { subTasks = []} == task)
-                                  then mapTask (\j -> j { status = Finished }) t
-                                  else t)) st
-      putStrLn $ prettyPrint updated -- . Numed i . pure $ task
-    Nothing -> mempty
+  case id >>= (\i -> (,) <$> pure i <*> flattened `safeIndex` (i - 1)) of
+    Just (i, selected) -> do
+      let updated = sequenceA . foreach st $ \tds -> fmap (\t -> t { status = Finished}) <$> treeAt tds selected
+      putStrLn . prettyPrint $ updated
+      putStrLn . prettyPrint . Numed i . pure $ selected
 
-  return st
+      return $ asum updated
+    Nothing -> putText "not a valid index" *> return st
+
+safeIndex :: [a] -> Int -> Maybe a
+safeIndex a i = case drop i a of
+  x:_ -> pure x
+  []  -> empty
 
 nextTask :: Action
 nextTask st = do
@@ -74,12 +90,15 @@ nextTask st = do
 
   return st
 
-firstOpenTask :: Task -> Maybe Task
-firstOpenTask t@(Task Open _ _ _ [])    = pure t
-firstOpenTask t@(Task Open _ _ _ ts)    = asum (map firstOpenTask ts) <|> pure t
-firstOpenTask   (Task Started _ _ _ ts) = asum $ map firstOpenTask ts
-firstOpenTask _ = Nothing
+firstOpenTask :: Todo Task -> Maybe Task
+firstOpenTask (Todo t _ ) | status t == Finished = empty
+firstOpenTask (Todo t []) = pure t
+firstOpenTask (Todo t ts) | isOpened t = asum (map firstOpenTask ts) <|> pure t
+firstOpenTask (Todo _ ts) = asum (map firstOpenTask ts)
 
+isOpened :: Task -> Bool
+isOpened (Task Open _ _ _) = True
+isOpened _                 = False
 
 currentTasks :: Action
 currentTasks st = do

@@ -38,6 +38,10 @@ executable todo
                      , protolude >= 0.1.6 && < 0.2
                      , megaparsec
                      , optparse-generic
+                     , lens
+                     , containers
+                     , brick
+                     , vty
   default-language:    Haskell2010
   default-extensions:  OverloadedStrings, NoImplicitPrelude
 
